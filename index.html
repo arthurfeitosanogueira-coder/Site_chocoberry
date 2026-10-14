@@ -8,6 +8,9 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- FontAwesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Firebase SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -59,7 +62,7 @@
       <!-- STATUS DA CONEXÃO -->
       <div class="hidden md:flex items-center gap-2 text-xs text-emerald-400 bg-emerald-950/50 px-3 py-1.5 rounded-full border border-emerald-500/30">
         <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-        <span>Sincronizado</span>
+        <span>Conectado ao Firebase</span>
       </div>
     </div>
   </header>
@@ -82,7 +85,7 @@
         <!-- Passo 1: Escolha da Calda -->
         <div class="bg-dark-900 p-5 rounded-xl border border-gold-500/20 shadow-md">
           <h2 class="text-sm font-semibold text-gold-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-            <i class="fa-solid fa-fire text-gold-500"></i> 1. Escolha a Calda (Obrigatório)
+            1. <i class="fa-solid fa-fire text-gold-500"></i> Escolha a Calda (Obrigatório)
           </h2>
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <button onclick="selecionarCalda(this, 'Chocolate Quente Ao Leite')" class="btn-calda p-4 rounded-lg bg-dark-800 border-2 border-transparent hover:border-gold-500/50 text-left transition-all">
@@ -206,8 +209,15 @@
 
   </main>
 
-  <!-- JAVASCRIPT -->
+  <!-- JAVASCRIPT COM FIREBASE -->
   <script>
+    // Configuração do Firebase
+    const firebaseConfig = {
+      databaseURL: "https://chocoberry-default-rtdb.firebaseio.com/"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
     // Estado do Formulário
     let pedidoAtual = {
       cliente: '',
@@ -216,24 +226,16 @@
       obs: ''
     };
 
-    // Array Global de Pedidos
-    let pedidos = [];
+    let pedidos = {};
 
-    // Canal de Comunicação em Tempo Real entre Abas do Navegador
-    const channel = new BroadcastChannel('chocoberry_orders');
-
-    // Inicialização
     document.addEventListener('DOMContentLoaded', () => {
-      carregarPedidosLocal();
-      
-      // Ouvir atualizações de outras abas/dispositivos
-      channel.onmessage = (event) => {
-        if (event.data.type === 'NOVOS_PEDIDOS') {
-          pedidos = event.data.pedidos;
-          renderizarPedidosCozinha();
-          tocarSomAviso();
-        }
-      };
+      // Ouve mudanças no Firebase em tempo real (para celular e PC ao mesmo tempo)
+      db.ref('pedidos').on('value', (snapshot) => {
+        const data = snapshot.val();
+        pedidos = data ? data : {};
+        renderizarPedidosCozinha();
+        tocarSomAviso();
+      });
 
       // Listener para o input de nome
       document.getElementById('nome-cliente').addEventListener('input', (e) => {
@@ -283,11 +285,9 @@
       const index = pedidoAtual.frutas.indexOf(fruta);
 
       if (index > -1) {
-        // Remover
         pedidoAtual.frutas.splice(index, 1);
         element.classList.remove('border-gold-500', 'bg-gold-500/10');
       } else {
-        // Adicionar (Validar Limite de 3)
         if (pedidoAtual.frutas.length >= 3) {
           alert("Apenas até 3 frutas são permitidas por pedido!");
           return;
@@ -296,7 +296,6 @@
         element.classList.add('border-gold-500', 'bg-gold-500/10');
       }
 
-      // Atualizar Contador e Resumo
       document.getElementById('contador-frutas').innerText = `${pedidoAtual.frutas.length} / 3 selecionadas`;
       
       const ulFrutas = document.getElementById('resumo-frutas');
@@ -307,7 +306,7 @@
       }
     }
 
-    // Enviar Pedido do Balcão para a Produção
+    // Enviar Pedido do Balcão para o Firebase
     function enviarPedido() {
       if (!pedidoAtual.calda) {
         alert("Por favor, selecione o tipo de calda!");
@@ -319,8 +318,9 @@
         return;
       }
 
+      const idUnico = 'pedido_' + Date.now();
       const novoPedido = {
-        id: Date.now(),
+        id: idUnico,
         hora: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
         cliente: pedidoAtual.cliente || 'Cliente ' + Math.floor(Math.random() * 100),
         calda: pedidoAtual.calda,
@@ -328,10 +328,13 @@
         obs: pedidoAtual.obs
       };
 
-      pedidos.push(novoPedido);
-      salvarESincronizar();
-      resetarFormulario();
-      alert("Pedido enviado para a produção!");
+      // Grava diretamente no Firebase
+      db.ref('pedidos/' + idUnico).set(novoPedido).then(() => {
+        resetarFormulario();
+        alert("Pedido enviado para a produção com sucesso!");
+      }).catch((error) => {
+        alert("Erro ao enviar pedido: " + error.message);
+      });
     }
 
     // Resetar o formulário do Balcão
@@ -356,8 +359,10 @@
       const mensagemVazio = document.getElementById('mensagem-vazio');
       const badge = document.getElementById('badge-pendentes');
 
-      badge.innerText = pedidos.length;
-      if (pedidos.length > 0) {
+      const lista = Object.values(pedidos);
+
+      badge.innerText = lista.length;
+      if (lista.length > 0) {
         badge.classList.remove('hidden');
         mensagemVazio.classList.add('hidden');
       } else {
@@ -365,7 +370,7 @@
         mensagemVazio.classList.remove('hidden');
       }
 
-      grid.innerHTML = pedidos.map(p => `
+      grid.innerHTML = lista.map(p => `
         <div class="bg-dark-900 rounded-xl border border-gold-500/30 p-5 shadow-lg flex flex-col justify-between">
           <div>
             <div class="flex justify-between items-start border-b border-gold-500/20 pb-3 mb-3">
@@ -373,7 +378,7 @@
                 <h3 class="font-bold text-lg text-gold-400">${p.cliente}</h3>
                 <span class="text-xs text-gray-400"><i class="fa-regular fa-clock"></i> ${p.hora}</span>
               </div>
-              <span class="bg-gold-500/10 border border-gold-500/30 text-gold-400 text-xs px-2.5 py-1 rounded-full font-bold">#${p.id.toString().slice(-4)}</span>
+              <span class="bg-gold-500/10 border border-gold-500/30 text-gold-400 text-xs px-2.5 py-1 rounded-full font-bold">#${p.id.slice(-4)}</span>
             </div>
 
             <div class="space-y-3 mb-4">
@@ -398,47 +403,32 @@
             </div>
           </div>
 
-          <button onclick="concluirPedido(${p.id})" class="w-full mt-2 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-sm transition-all flex items-center justify-center gap-2 shadow">
+          <button onclick="concluirPedido('${p.id}')" class="w-full mt-2 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-sm transition-all flex items-center justify-center gap-2 shadow">
             <i class="fa-solid fa-check"></i> MARCAR COMO PRONTO
           </button>
         </div>
       `).join('');
     }
 
-    // Marcar Pedido como Concluído
+    // Marcar Pedido como Concluído (Apaga do Firebase)
     function concluirPedido(id) {
-      pedidos = pedidos.filter(p => p.id !== id);
-      salvarESincronizar();
+      db.ref('pedidos/' + id).remove().then(() => {
+        // Atualizado em tempo real pelo listener do firebase
+      });
     }
 
     // Pedido de Teste
     function criarPedidoTeste() {
+      const idUnico = 'pedido_' + Date.now();
       const teste = {
-        id: Date.now(),
+        id: idUnico,
         hora: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
         cliente: 'Cliente Teste ' + Math.floor(Math.random() * 50),
         calda: 'Chocolate Quente Ao Leite',
         frutas: ['Morango', 'Banana'],
         obs: 'Pedido gerado para teste rápido'
       };
-      pedidos.push(teste);
-      salvarESincronizar();
-    }
-
-    // Salvar Localmente e Notificar Outras Abas
-    function salvarESincronizar() {
-      localStorage.setItem('chocoberry_pedidos', JSON.stringify(pedidos));
-      channel.postMessage({ type: 'NOVOS_PEDIDOS', pedidos });
-      renderizarPedidosCozinha();
-    }
-
-    // Carregar do LocalStorage ao abrir
-    function carregarPedidosLocal() {
-      const salvos = localStorage.getItem('chocoberry_pedidos');
-      if (salvos) {
-        pedidos = JSON.parse(salvos);
-      }
-      renderizarPedidosCozinha();
+      db.ref('pedidos/' + idUnico).set(teste);
     }
 
     // Efeito Sonoro quando entra novo pedido
@@ -450,12 +440,12 @@
         osc.connect(gain);
         gain.connect(audioCtx.destination);
         osc.type = 'sine';
-        osc.frequency.setValueAtTime(587.33, audioCtx.currentTime); // D5
+        osc.frequency.setValueAtTime(587.33, audioCtx.currentTime);
         gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
         osc.start();
         osc.stop(audioCtx.currentTime + 0.2);
       } catch (e) {
-        console.log('Áudio não permitido sem interação prévia.');
+        console.log('Áudio aguardando interação.');
       }
     }
   </script>
